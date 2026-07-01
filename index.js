@@ -4,68 +4,6 @@ process.on('uncaughtException', (err) => console.error('Uncaught exception:', er
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
   ChannelType, REST, Routes, SlashCommandBuilder, AttachmentBuilder
-
-index.js
-31 KB
-{
-  "$schema": "https://railway.app/railway.schema.json",
-  "build": {
-    "builder": "NIXPACKS"
-  },
-  "deploy": {
-
-railway.json
-1 KB
-# 🤖 Discord Bot — Setup Guide
-
-Follow these steps exactly and your bot will be running 24/7.
-
----
-
-SETUP.md
-3 KB
-{
-  "name": "discord-moderation-bot",
-  "version": "1.0.0",
-  "description": "A moderation + utility Discord bot",
-  "main": "index.js",
-  "scripts": {
-
-package.json
-1 KB
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bot Dashboard</title>... (11 KB left)
-
-dashboard.html
-61 KB
-the.realsetty [SAB],  — 11:57 AM
-◜🛬przyloty🛬
-👑Owner👑
-😎Zastępca-Ownera😎
-🧠Helper🧠
-tomasz — 12:01 PM
-process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
-process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
-
-const {
-  Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-  ChannelType, REST, Routes, SlashCommandBuilder, AttachmentBuilder
-
-index.js
-31 KB
-﻿
-tomasz
-tomaszsuchta
-process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
-process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
-
-const {
-  Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-  ChannelType, REST, Routes, SlashCommandBuilder, AttachmentBuilder
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -619,5 +557,3 @@ client.on('interactionCreate', async (interaction) => {
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN);
-index.js
-31 KB
