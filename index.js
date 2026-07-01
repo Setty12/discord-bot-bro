@@ -1,9 +1,3 @@
-the.realsetty
-wojtex1
-ROBLOX
-+1
-
-tomasz — 11:51 AM
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
 process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
 
