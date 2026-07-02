@@ -251,6 +251,7 @@ const defaultConfig = {
 };
 
 const config = { ...defaultConfig, ...loadJSON('config.json', {}) };
+// Keep reference to defaults for filling missing keys after cloud load
 function saveConfig() {
   saveJSON('config.json', config);
   saveConfigToCloud(config);
@@ -388,12 +389,19 @@ client.once('clientReady', async () => {
   console.log(`✅ Bot is online as ${client.user.tag}`);
   client.user.setActivity('Moderating the server', { type: 3 });
 
-  // Load config from JSONBin (overwrites defaults with saved settings)
+  // Load config from cloud (overwrites defaults with saved settings)
   const cloudConfig = await loadConfigFromCloud();
   if (cloudConfig) {
-    // Deep merge — replace each key entirely from cloud
+    // Merge cloud into config — cloud wins, but defaults fill missing keys
     for (const key of Object.keys(cloudConfig)) {
       config[key] = cloudConfig[key];
+    }
+    // Fill any keys that exist in defaults but not in old saved config
+    for (const key of Object.keys(defaultConfig)) {
+      if (config[key] === undefined) {
+        config[key] = defaultConfig[key];
+        console.log(`✅ Added missing key from defaults: ${key}`);
+      }
     }
     console.log('✅ Config restored from cloud, welcomeMessage:', JSON.stringify(config.welcomeMessage));
   } else {
