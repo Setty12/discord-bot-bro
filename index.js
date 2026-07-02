@@ -36,6 +36,9 @@ http.createServer(async (req, res) => {
       joinDM: config.joinDM,
       antiSpam: config.antiSpam,
       warnThresholds: config.warnThresholds,
+      introSystem: config.introSystem,
+      welcomeMessage: config.welcomeMessage,
+      customCommands: config.customCommands,
     }, roles }));
   }
 
