@@ -36,12 +36,14 @@ http.createServer(async (req, res) => {
       joinDM: config.joinDM,
       antiSpam: config.antiSpam,
       warnThresholds: config.warnThresholds,
+      introSystem: config.introSystem,
+      welcomeMessage: config.welcomeMessage,
     }, roles }));
   }
 
   if (req.method === 'POST' && req.url === '/config') {
     const data = await parseBody();
-    const allowed = ['welcomeChannelName','logChannelName','autoRole','badWords','permissions','memberCounterChannelName','joinDM','antiSpam','warnThresholds'];
+    const allowed = ['welcomeChannelName','logChannelName','autoRole','badWords','permissions','memberCounterChannelName','joinDM','antiSpam','warnThresholds','introSystem','welcomeMessage'];
     allowed.forEach(k => { if (data[k] !== undefined) config[k] = data[k]; });
     saveConfig();
     res.writeHead(200); return res.end(JSON.stringify({ success: true }));
@@ -151,19 +153,34 @@ function saveJSON(file, data) {
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const defaultConfig = {
-  welcomeChannelName: '◜🛬przyloty🛬',
-  logChannelName: 'logi',
+  welcomeChannelName: 'welcome',
+  logChannelName: 'mod-logs',
   ticketCategoryName: 'Tickets',
   memberCounterChannelName: '👤⬩Members: {count}',
-  autoRole: '',
+  autoRole: '👤⬩Member',
   badWords: ['badword1', 'badword2'],
   customCommands: {
     'rules': 'Follow the server rules or you will be banned!',
     'socials': 'Instagram: @yourhandle | YouTube: @yourchannel',
   },
+  welcomeMessage: {
+    enabled: true,
+    title: '👋 Welcome to {server}!',
+    description: "Hey {mention}, glad to have you here!\nMake sure to read the rules and enjoy your stay.",
+    color: '#5865F2',
+    image: '',
+    thumbnail: 'avatar',
+  },
   joinDM: {
     enabled: false,
-    message: 'Welcome to the server! Make sure to read the rules.',
+    title: '',
+    description: '',
+    color: '#5865F2',
+    image: '',
+    thumbnail: '',
+    footer: '',
+    btnLabel: '',
+    btnUrl: '',
   },
   antiSpam: {
     enabled: true,
@@ -176,16 +193,29 @@ const defaultConfig = {
     muteDuration: 60,
     banAt: 5,
   },
+  introSystem: {
+    enabled: false,
+    channelId: '',
+    channelName: '',
+    minWords: 15,
+    successMsg: 'Welcome {mention} 🦅 check your DMs I just sent you a gift',
+    shortMsg: "That's too short, I still don't know shit about you 😤. Try again",
+    dmTitle: '',
+    dmDesc: '',
+    dmLink: '',
+    color: '#5865F2',
+    dmImage: '',
+  },
   permissions: {
-    kick:     ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    ban:      ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    unban:    ['👑Owner👑', '😎Zastępca-Ownera😎'],
-    mute:     ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    unmute:   ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    warn:     ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    clear:    ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    purge:    ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
-    announce: ['👑Owner👑', '😎Zastępca-Ownera😎'],
+    kick:     ['👑⬩Owner', '📖⬩Moderator'],
+    ban:      ['👑⬩Owner', '📖⬩Moderator'],
+    unban:    ['👑⬩Owner', '📖⬩Moderator'],
+    mute:     ['👑⬩Owner', '📖⬩Moderator'],
+    unmute:   ['👑⬩Owner', '📖⬩Moderator'],
+    warn:     ['👑⬩Owner', '📖⬩Moderator'],
+    clear:    ['👑⬩Owner', '📖⬩Moderator'],
+    purge:    ['👑⬩Owner', '📖⬩Moderator'],
+    announce: ['👑⬩Owner'],
   },
 };
 
@@ -196,6 +226,8 @@ function saveConfig() { saveJSON('config.json', config); }
 let warnings = loadJSON('warnings.json', {});
 let reactionRoles = loadJSON('reaction-roles.json', {});
 const spamTracker = {};
+const introCompleted = loadJSON('intro-completed.json', {});
+function saveIntroCompleted() { saveJSON('intro-completed.json', introCompleted); }
 
 function saveWarnings() { saveJSON('warnings.json', warnings); }
 function saveReactionRoles() { saveJSON('reaction-roles.json', reactionRoles); }
@@ -334,10 +366,8 @@ client.on('guildMemberAdd', async (member) => {
   console.log(`Member joined: ${member.user.tag}`);
   await updateMemberCount(member.guild);
 
-  if (config.autoRole) {
-    const role = member.guild.roles.cache.find(r => r.name === config.autoRole);
-    if (role) await member.roles.add(role).catch(err => console.error('Role assign error:', err));
-  }
+  const role = member.guild.roles.cache.find(r => r.name === config.autoRole);
+  if (role) await member.roles.add(role).catch(err => console.error('Role assign error:', err));
 
   // Welcome channel embed
   const welcomeChannel = member.guild.channels.cache.find(ch => ch.name === config.welcomeChannelName);
@@ -352,8 +382,43 @@ client.on('guildMemberAdd', async (member) => {
   }
 
   // Join DM
-  if (config.joinDM?.enabled && config.joinDM?.message) {
-    await member.send(config.joinDM.message).catch(() => {});
+  if (config.joinDM?.enabled) {
+    try {
+      const dm = config.joinDM;
+      const username = member.user.username;
+      const replaceUser = (str) => str ? str.replace(/\{user\}/g, username) : str;
+
+      if (dm.title || dm.description) {
+        const embed = new EmbedBuilder().setColor(dm.color || '#5865F2');
+        if (dm.title) embed.setTitle(replaceUser(dm.title));
+        if (dm.description) embed.setDescription(replaceUser(dm.description));
+        if (dm.thumbnail) embed.setThumbnail(dm.thumbnail);
+        if (dm.footer) embed.setFooter({ text: dm.footer });
+        if (dm.image && !dm.image.startsWith('data:')) embed.setImage(dm.image);
+
+        const msgPayload = { embeds: [embed] };
+
+        // Button as a component row
+        if (dm.btnLabel && dm.btnUrl) {
+          const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+          const btn = new ButtonBuilder().setLabel(dm.btnLabel).setURL(dm.btnUrl).setStyle(ButtonStyle.Link);
+          msgPayload.components = [new ActionRowBuilder().addComponents(btn)];
+        }
+
+        // Handle uploaded base64 image
+        if (dm.image?.startsWith('data:')) {
+          const buf = Buffer.from(dm.image.split(',')[1], 'base64');
+          embed.setImage('attachment://dm-image.png');
+          msgPayload.files = [new AttachmentBuilder(buf, { name: 'dm-image.png' })];
+        }
+
+        await member.send(msgPayload).catch(() => {});
+      } else if (dm.message) {
+        await member.send(replaceUser(dm.message)).catch(() => {});
+      }
+    } catch (err) {
+      console.error('Join DM error:', err);
+    }
   }
 
   // Mod log
@@ -377,6 +442,43 @@ client.on('messageCreate', async (message) => {
     const warn = await message.channel.send(`⚠️ ${message.author}, that language isn't allowed here.`);
     setTimeout(() => warn.delete().catch(() => {}), 5000);
     return;
+  }
+
+  // Intro system
+  if (config.introSystem?.enabled && config.introSystem?.channelId) {
+    if (message.channel.id === config.introSystem.channelId && !introCompleted[message.author.id]) {
+      const wordCount = message.content.trim().split(/\s+/).length;
+      const { successMsg, shortMsg, minWords, dmTitle, dmDesc, dmLink, color, dmImage } = config.introSystem;
+      if (wordCount >= (minWords || 15)) {
+        // Mark as completed
+        introCompleted[message.author.id] = true;
+        saveIntroCompleted();
+        // Reply in channel
+        const reply = successMsg.replace('{mention}', `<@${message.author.id}>`);
+        await message.reply(reply).catch(() => {});
+        // Send DM with resource
+        try {
+          if (dmTitle || dmDesc) {
+            const embed = new EmbedBuilder().setColor(color || '#5865F2');
+            if (dmTitle) embed.setTitle(dmTitle);
+            if (dmDesc) embed.setDescription(dmDesc);
+            if (dmImage) embed.setImage(dmImage);
+            const payload = { embeds: [embed] };
+            if (dmLink) {
+              const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+              const btn = new ButtonBuilder().setLabel('View Resource →').setURL(dmLink).setStyle(ButtonStyle.Link);
+              payload.components = [new ActionRowBuilder().addComponents(btn)];
+            }
+            await message.author.send(payload).catch(() => {});
+          } else if (dmLink) {
+            await message.author.send(dmLink).catch(() => {});
+          }
+        } catch (err) { console.error('Intro DM error:', err); }
+      } else {
+        await message.reply(shortMsg || "That's too short! Try again.").catch(() => {});
+      }
+      return;
+    }
   }
 
   // Anti-spam
