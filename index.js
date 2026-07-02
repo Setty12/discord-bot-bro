@@ -140,6 +140,7 @@ const client = new Client({
 
 // ─── RAILWAY VARIABLE PERSISTENCE ────────────────────────────────────────────
 const RAILWAY_TOKEN = process.env.RAILWAY_TOKEN;
+const RAILWAY_PROJECT_ID = 'b0673f7d-458e-48d4-b892-fda120c00efc';
 const RAILWAY_SERVICE_ID = '9b3127aa-071e-4970-a9c9-55802a925316';
 const RAILWAY_ENVIRONMENT_ID = '6ed33ec0-0092-4be8-8100-b6b5da485441';
 const DATA_DIR = './data';
@@ -165,10 +166,10 @@ async function loadConfigFromCloud() {
   if (!RAILWAY_TOKEN) { console.log('⚠️ No RAILWAY_TOKEN set'); return null; }
   try {
     const data = await railwayGraphQL(`
-      query($serviceId: String!, $environmentId: String!) {
-        variables(serviceId: $serviceId, environmentId: $environmentId)
+      query($projectId: String!, $serviceId: String!, $environmentId: String!) {
+        variables(projectId: $projectId, serviceId: $serviceId, environmentId: $environmentId)
       }
-    `, { serviceId: RAILWAY_SERVICE_ID, environmentId: RAILWAY_ENVIRONMENT_ID });
+    `, { projectId: RAILWAY_PROJECT_ID, serviceId: RAILWAY_SERVICE_ID, environmentId: RAILWAY_ENVIRONMENT_ID });
     const vars = data?.data?.variables;
     if (vars?.BOT_CONFIG) {
       const parsed = JSON.parse(vars.BOT_CONFIG);
@@ -184,8 +185,9 @@ async function saveConfigToCloud(configData) {
   if (!RAILWAY_TOKEN) return;
   try {
     const result = await railwayGraphQL(`
-      mutation($serviceId: String!, $environmentId: String!, $name: String!, $value: String!) {
+      mutation($projectId: String!, $serviceId: String!, $environmentId: String!, $name: String!, $value: String!) {
         variableUpsert(input: {
+          projectId: $projectId,
           serviceId: $serviceId,
           environmentId: $environmentId,
           name: $name,
@@ -193,6 +195,7 @@ async function saveConfigToCloud(configData) {
         })
       }
     `, {
+      projectId: RAILWAY_PROJECT_ID,
       serviceId: RAILWAY_SERVICE_ID,
       environmentId: RAILWAY_ENVIRONMENT_ID,
       name: 'BOT_CONFIG',
