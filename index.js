@@ -183,7 +183,7 @@ async function loadConfigFromCloud() {
 async function saveConfigToCloud(configData) {
   if (!RAILWAY_TOKEN) return;
   try {
-    await railwayGraphQL(`
+    const result = await railwayGraphQL(`
       mutation($input: VariableCollectionUpsertInput!) {
         variableCollectionUpsert(input: $input)
       }
@@ -194,7 +194,11 @@ async function saveConfigToCloud(configData) {
         variables: { BOT_CONFIG: JSON.stringify(configData) }
       }
     });
-    console.log('✅ Config saved to Railway Variables');
+    if (result.errors) {
+      console.error('Railway save GraphQL errors:', JSON.stringify(result.errors));
+    } else {
+      console.log('✅ Config saved to Railway Variables', JSON.stringify(result.data));
+    }
   } catch (err) { console.error('Railway save error:', err.message); }
 }
 
