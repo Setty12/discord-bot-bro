@@ -138,9 +138,10 @@ const client = new Client({
   ],
 });
 
-// ─── JSONBIN PERSISTENCE ─────────────────────────────────────────────────────
-const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
-const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
+// ─── RAILWAY VARIABLE PERSISTENCE ────────────────────────────────────────────
+const RAILWAY_TOKEN = process.env.RAILWAY_TOKEN;
+const RAILWAY_SERVICE_ID = '9b3127aa-071e-4970-a9c9-55802a925316';
+const RAILWAY_ENVIRONMENT_ID = '6ed33ec0-0092-4be8-8100-b6b5da485441';
 const DATA_DIR = './data';
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
@@ -151,34 +152,50 @@ function saveJSON(file, data) {
   try { fs.writeFileSync(`${DATA_DIR}/${file}`, JSON.stringify(data, null, 2)); } catch {}
 }
 
+async function railwayGraphQL(query, variables) {
+  const res = await fetch('https://backboard.railway.app/graphql/v2', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RAILWAY_TOKEN}` },
+    body: JSON.stringify({ query, variables })
+  });
+  return res.json();
+}
+
 async function loadConfigFromCloud() {
-  if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) return null;
+  if (!RAILWAY_TOKEN) { console.log('⚠️ No RAILWAY_TOKEN set'); return null; }
   try {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
-      headers: { 'X-Master-Key': JSONBIN_API_KEY }
-    });
-    const text = await res.text();
-    console.log('JSONBin raw response:', text.substring(0, 200));
-    const data = JSON.parse(text);
-    if (data.record && data.record.welcomeChannelName) {
-      console.log('✅ Config loaded from JSONBin');
-      return data.record;
+    const data = await railwayGraphQL(`
+      query($serviceId: String!, $environmentId: String!) {
+        variables(serviceId: $serviceId, environmentId: $environmentId)
+      }
+    `, { serviceId: RAILWAY_SERVICE_ID, environmentId: RAILWAY_ENVIRONMENT_ID });
+    const vars = data?.data?.variables;
+    if (vars?.BOT_CONFIG) {
+      const parsed = JSON.parse(vars.BOT_CONFIG);
+      console.log('✅ Config loaded from Railway Variables');
+      return parsed;
     }
-    console.log('⚠️ JSONBin has no valid config yet:', JSON.stringify(data).substring(0, 100));
-  } catch (err) { console.error('JSONBin load error:', err.message); }
+    console.log('⚠️ No BOT_CONFIG variable found yet');
+  } catch (err) { console.error('Railway load error:', err.message); }
   return null;
 }
 
 async function saveConfigToCloud(configData) {
-  if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) return;
+  if (!RAILWAY_TOKEN) return;
   try {
-    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY },
-      body: JSON.stringify(configData)
+    await railwayGraphQL(`
+      mutation($input: VariableCollectionUpsertInput!) {
+        variableCollectionUpsert(input: $input)
+      }
+    `, {
+      input: {
+        serviceId: RAILWAY_SERVICE_ID,
+        environmentId: RAILWAY_ENVIRONMENT_ID,
+        variables: { BOT_CONFIG: JSON.stringify(configData) }
+      }
     });
-    console.log('✅ Config saved to JSONBin');
-  } catch (err) { console.error('JSONBin save error:', err.message); }
+    console.log('✅ Config saved to Railway Variables');
+  } catch (err) { console.error('Railway save error:', err.message); }
 }
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
