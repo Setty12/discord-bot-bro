@@ -171,9 +171,10 @@ async function loadConfigFromCloud() {
       }
     `, { projectId: RAILWAY_PROJECT_ID, serviceId: RAILWAY_SERVICE_ID, environmentId: RAILWAY_ENVIRONMENT_ID });
     const vars = data?.data?.variables;
+    console.log('Railway vars keys:', vars ? Object.keys(vars).join(', ') : 'null');
     if (vars?.BOT_CONFIG) {
       const parsed = JSON.parse(vars.BOT_CONFIG);
-      console.log('✅ Config loaded from Railway Variables');
+      console.log('✅ Config loaded from Railway Variables, keys:', Object.keys(parsed).join(', '));
       return parsed;
     }
     console.log('⚠️ No BOT_CONFIG variable found yet');
@@ -394,7 +395,7 @@ client.once('clientReady', async () => {
     for (const key of Object.keys(cloudConfig)) {
       config[key] = cloudConfig[key];
     }
-    console.log('✅ Config restored from cloud:', JSON.stringify(config.welcomeMessage));
+    console.log('✅ Config restored from cloud, welcomeMessage:', JSON.stringify(config.welcomeMessage));
   } else {
     console.log('⚠️ No cloud config found, using defaults');
   }
