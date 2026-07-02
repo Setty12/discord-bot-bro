@@ -359,8 +359,13 @@ client.once('clientReady', async () => {
   // Load config from JSONBin (overwrites defaults with saved settings)
   const cloudConfig = await loadConfigFromCloud();
   if (cloudConfig) {
-    Object.assign(config, cloudConfig);
-    console.log('✅ Config restored from cloud');
+    // Deep merge — replace each key entirely from cloud
+    for (const key of Object.keys(cloudConfig)) {
+      config[key] = cloudConfig[key];
+    }
+    console.log('✅ Config restored from cloud:', JSON.stringify(config.welcomeMessage));
+  } else {
+    console.log('⚠️ No cloud config found, using defaults');
   }
 
   for (const guild of client.guilds.cache.values()) {
