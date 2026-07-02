@@ -157,11 +157,14 @@ async function loadConfigFromCloud() {
     const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
       headers: { 'X-Master-Key': JSONBIN_API_KEY }
     });
-    const data = await res.json();
-    if (data.record && Object.keys(data.record).length > 1) {
+    const text = await res.text();
+    console.log('JSONBin raw response:', text.substring(0, 200));
+    const data = JSON.parse(text);
+    if (data.record && data.record.welcomeChannelName) {
       console.log('✅ Config loaded from JSONBin');
       return data.record;
     }
+    console.log('⚠️ JSONBin has no valid config yet:', JSON.stringify(data).substring(0, 100));
   } catch (err) { console.error('JSONBin load error:', err.message); }
   return null;
 }
