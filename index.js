@@ -44,8 +44,11 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && req.url === '/config') {
     const data = await parseBody();
-    const allowed = ['welcomeChannelName','logChannelName','autoRole','badWords','permissions','memberCounterChannelName','joinDM','antiSpam','warnThresholds'];
-    allowed.forEach(k => { if (data[k] !== undefined) config[k] = data[k]; });
+    // Accept ALL config keys from dashboard
+    for (const key of Object.keys(data)) {
+      config[key] = data[key];
+    }
+    console.log('Config updated, keys:', Object.keys(data).join(', '));
     saveConfig();
     res.writeHead(200); return res.end(JSON.stringify({ success: true }));
   }
@@ -227,7 +230,14 @@ const defaultConfig = {
   },
   joinDM: {
     enabled: false,
-    message: 'Welcome to the server! Make sure to read the rules.',
+    title: '',
+    description: '',
+    color: '#5865F2',
+    image: '',
+    thumbnail: '',
+    footer: '',
+    btnLabel: '',
+    btnUrl: '',
   },
   antiSpam: {
     enabled: true,
@@ -239,6 +249,27 @@ const defaultConfig = {
     muteAt: 3,
     muteDuration: 60,
     banAt: 5,
+  },
+  welcomeMessage: {
+    enabled: true,
+    title: '👋 Welcome to {server}!',
+    description: 'Hey {mention}, glad to have you here!\\nMake sure to read the rules and enjoy your stay.',
+    color: '#5865F2',
+    image: '',
+    thumbnail: 'avatar',
+  },
+  introSystem: {
+    enabled: false,
+    channelId: '',
+    channelName: '',
+    minWords: 15,
+    successMsg: 'Welcome {mention} check your DMs I just sent you a gift',
+    shortMsg: 'That is too short! Try again.',
+    dmTitle: '',
+    dmDesc: '',
+    dmLink: '',
+    color: '#5865F2',
+    dmImage: '',
   },
   permissions: {
     kick:     ['👑Owner👑', '😎Zastępca-Ownera😎', '🧠Helper🧠'],
