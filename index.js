@@ -455,9 +455,14 @@ function buildWelcomeEmbed(member) {
     .replace(/\{server\}/g, member.guild.name)
     .replace(/\{count\}/g, String(member.guild.memberCount));
 
+  // {mention} in embed titles shows as raw text like <@123456> — Discord doesn't
+  // render mentions in titles. Strip it from the title; the ping is sent separately
+  // as plain message content in the welcomeChannel.send() call.
+  const replaceTitle = (text) => replacePlaceholders(text || '').replace(/<@\d+>/g, '').trim();
+
   const embed = new EmbedBuilder()
     .setColor(wm.color || '#5865F2')
-    .setTitle(replacePlaceholders(wm.title || '👋 Welcome to {server}!'))
+    .setTitle(replaceTitle(wm.title || '👋 Welcome to {server}!'))
     .setDescription(replacePlaceholders(wm.description || 'Hey {mention}, glad to have you here!\nEnjoy your stay.'))
     .setFooter({ text: `Member #${member.guild.memberCount}` });
 
@@ -513,7 +518,12 @@ client.on('guildMemberAdd', async (member) => {
   if (config.welcomeMessage?.enabled !== false) {
     const welcomeChannel = member.guild.channels.cache.find(ch => ch.name === config.welcomeChannelName);
     if (welcomeChannel) {
-      welcomeChannel.send({ embeds: [buildWelcomeEmbed(member)] }).catch(err => console.error('Welcome send error:', err));
+      // Discord does not render mentions inside embed titles — they show as raw <@id> text.
+      // Sending mention as plain content triggers the actual ping.
+      welcomeChannel.send({
+        content: `<@${member.user.id}>`,
+        embeds: [buildWelcomeEmbed(member)]
+      }).catch(err => console.error('Welcome send error:', err));
     }
   }
 
