@@ -3,7 +3,11 @@ process.on('uncaughtException', (err) => console.error('Uncaught exception:', er
 
 const {
   Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits,
-  ChannelType, REST, Routes, SlashCommandBuilder, AttachmentBuilder
+  ChannelType, REST, Routes, SlashCommandBuilder, AttachmentBuilder,
+  ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
+  ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize,
+  MediaGalleryBuilder, MediaGalleryItemBuilder,
+  Partials,
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -39,14 +43,17 @@ http.createServer(async (req, res) => {
       introSystem: config.introSystem,
       welcomeMessage: config.welcomeMessage,
       customCommands: config.customCommands,
+      ticketCategoryName: config.ticketCategoryName,
     }, roles }));
   }
 
   if (req.method === 'POST' && req.url === '/config') {
     const data = await parseBody();
-    // Accept ALL config keys from dashboard
+    // Accept all config keys from dashboard.
+    // ticketPanel is excluded — it has its own /ticket-panel endpoint and
+    // should never be overwritten by a /config POST.
     for (const key of Object.keys(data)) {
-      config[key] = data[key];
+      if (key !== 'ticketPanel') config[key] = data[key];
     }
     console.log('Config updated, keys:', Object.keys(data).join(', '));
     saveConfig();
@@ -138,6 +145,36 @@ http.createServer(async (req, res) => {
   }
 
 
+  // Send ticket panel to a channel directly from the dashboard
+  if (req.method === 'POST' && req.url === '/send-panel') {
+    const data = await parseBody();
+    const guild = client.guilds.cache.first();
+    if (!guild) { res.writeHead(500); return res.end(JSON.stringify({ error: 'Bot not in any server' })); }
+    const channel = data.channelId
+      ? guild.channels.cache.get(data.channelId)
+      : guild.channels.cache.find(c => c.name === data.channelName && c.type === 0);
+    if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'Channel not found' })); }
+    try {
+      await postTicketPanel(channel, guild);
+      res.writeHead(200); return res.end(JSON.stringify({ success: true }));
+    } catch (err) {
+      res.writeHead(500); return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Ticket panel config — GET returns current config, POST updates it
+  if (req.method === 'GET' && req.url === '/ticket-panel') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify(config.ticketPanel || {}));
+  }
+
+  if (req.method === 'POST' && req.url === '/ticket-panel') {
+    const data = await parseBody();
+    config.ticketPanel = data;
+    saveConfig();
+    res.writeHead(200); return res.end(JSON.stringify({ success: true }));
+  }
+
   // Previously the dashboard had no way to see live server stats.
   if (req.method === 'GET' && req.url === '/stats') {
     const guild = client.guilds.cache.first();
@@ -161,10 +198,18 @@ http.createServer(async (req, res) => {
 // ─── CLIENT ──────────────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration, GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildModeration,
+    GatewayIntentBits.GuildMessageReactions,
   ],
+  // BUG FIX #2 (continued): These three partials must ALL be present together.
+  // Message  — allows receiving reaction events for uncached messages
+  // Channel  — required when Message partial is used (reaction may be in uncached DM channel)
+  // Reaction — allows receiving the reaction data itself when it's only partially available
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 // ─── RAILWAY VARIABLE PERSISTENCE ────────────────────────────────────────────
@@ -298,15 +343,59 @@ const defaultConfig = {
     dmImage: '',
   },
   permissions: {
-    kick:     ['👑⬩Owner', '📖⬩Moderator'],
-    ban:      ['👑⬩Owner', '📖⬩Moderator'],
-    unban:    ['👑⬩Owner', '📖⬩Moderator'],
-    mute:     ['👑⬩Owner', '📖⬩Moderator'],
-    unmute:   ['👑⬩Owner', '📖⬩Moderator'],
-    warn:     ['👑⬩Owner', '📖⬩Moderator'],
-    clear:    ['👑⬩Owner', '📖⬩Moderator'],
-    purge:    ['👑⬩Owner', '📖⬩Moderator'],
-    announce: ['👑⬩Owner'],
+    kick:      ['👑⬩Owner', '📖⬩Moderator'],
+    ban:       ['👑⬩Owner', '📖⬩Moderator'],
+    unban:     ['👑⬩Owner', '📖⬩Moderator'],
+    mute:      ['👑⬩Owner', '📖⬩Moderator'],
+    unmute:    ['👑⬩Owner', '📖⬩Moderator'],
+    warn:      ['👑⬩Owner', '📖⬩Moderator'],
+    clear:     ['👑⬩Owner', '📖⬩Moderator'],
+    purge:     ['👑⬩Owner', '📖⬩Moderator'],
+    announce:  ['👑⬩Owner'],
+    slowmode:  ['👑⬩Owner', '📖⬩Moderator'],
+  },
+
+  // ─── TICKET PANEL CONFIG ────────────────────────────────────────────────────
+  // This powers the /ticket-panel command — the dropdown embed your members click.
+  // Fully configurable from the dashboard's new "Ticket Panel" page.
+  ticketPanel: {
+    // The embed that gets posted when you run /ticket-panel
+    embed: {
+      title: '🎫 Support Tickets',
+      description: '>> To make a purchase, select the appropriate option from the dropdown below.\n>> After filling out the form, a ticket will be created.',
+      color: '#9b59b6',
+      image: '',        // URL or base64 — shown as the big image in the embed (like the banner in your screenshot)
+      thumbnail: '',
+      footer: 'Made by your server',
+      fields: [],       // optional embed fields acting as visual dividers / info sections
+    },
+    // Up to 5 ticket types shown in the select menu dropdown
+    // Each becomes one option the user can pick
+    ticketTypes: [
+      {
+        value: 'purchase',            // internal ID — used for channel naming, must be unique, no spaces
+        label: 'Purchase',            // bold heading shown in the dropdown
+        description: 'Create a purchase ticket', // subtext shown under the label
+        emoji: '🛒',                  // emoji shown next to the option
+        channelPrefix: 'ticket-purchase', // channel will be named: ticket-purchase-username
+        // Welcome embed sent inside the new ticket channel
+        welcomeTitle: '🛒 Purchase Ticket',
+        welcomeDesc: "Thanks for opening a ticket! Describe what you want to purchase and we'll be right with you.",
+        welcomeColor: '#9b59b6',
+      },
+      {
+        value: 'support',
+        label: 'Support',
+        description: 'Create a support ticket',
+        emoji: '❓',
+        channelPrefix: 'ticket-support',
+        welcomeTitle: '❓ Support Ticket',
+        welcomeDesc: "Thanks for opening a ticket! Describe your issue and a moderator will help you shortly.",
+        welcomeColor: '#5865f2',
+      },
+    ],
+    // Select menu placeholder text (what it says before user picks an option)
+    placeholder: '✖ | No option selected',
   },
 };
 
@@ -367,6 +456,19 @@ const commands = [
   new SlashCommandBuilder().setName('rules').setDescription('Show server rules'),
   new SlashCommandBuilder().setName('socials').setDescription('Show social media links'),
   new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+  // BUG FIX #3: /ticket and /close were listed in the dashboard's Commands page
+  // but never actually registered or implemented. Added here so they work.
+  new SlashCommandBuilder().setName('ticket').setDescription('Open a support ticket'),
+  new SlashCommandBuilder().setName('close').setDescription('Close this ticket channel (mods only)'),
+  // FEATURE 1: /slowmode — lets mods throttle a channel during raids or floods
+  new SlashCommandBuilder().setName('slowmode').setDescription('Set slowmode on this channel')
+    .addIntegerOption(o => o.setName('seconds').setDescription('Seconds between messages (0 = off, max 21600)').setRequired(true).setMinValue(0).setMaxValue(21600)),
+  // FEATURE 2: /userinfo — lets mods quickly look up a user's join date, roles, and warning count
+  new SlashCommandBuilder().setName('userinfo').setDescription('Show info about a user')
+    .addUserOption(o => o.setName('user').setDescription('User to look up (leave blank for yourself)')),
+  // Posts the ticket panel embed+dropdown in the current channel
+  new SlashCommandBuilder().setName('ticket-panel').setDescription('Post the ticket panel with dropdown menu (admin only)')
+    .addChannelOption(o => o.setName('channel').setDescription('Channel to post in (leave blank for current channel)')),
 ];
 
 async function registerCommands(clientId, guildId) {
@@ -394,7 +496,7 @@ function logAction(guild, action, target, moderator, reason, color = '#ED4245') 
     const logChannel = guild.channels.cache.find(c => c.name === config.logChannelName);
     if (!logChannel) return;
     const embed = new EmbedBuilder().setColor(color).setTitle(action).setTimestamp();
-    if (target) embed.addFields({ name: 'User', value: `${target.tag} (${target.id})`, inline: true });
+    if (target) embed.addFields({ name: 'User', value: `${target.tag ?? target.username ?? String(target.id)} (${target.id})`, inline: true });
     if (moderator) embed.addFields({ name: moderator.bot ? 'Action' : 'Moderator', value: moderator.tag, inline: true });
     if (reason) embed.addFields({ name: 'Reason', value: reason });
     logChannel.send({ embeds: [embed] });
@@ -455,20 +557,15 @@ function buildWelcomeEmbed(member) {
     .replace(/\{server\}/g, member.guild.name)
     .replace(/\{count\}/g, String(member.guild.memberCount));
 
-  // {mention} in embed titles shows as raw text like <@123456> — Discord doesn't
-  // render mentions in titles. Strip it from the title; the ping is sent separately
-  // as plain message content in the welcomeChannel.send() call.
-  const replaceTitle = (text) => replacePlaceholders(text || '').replace(/<@\d+>/g, '').trim();
-
   const embed = new EmbedBuilder()
     .setColor(wm.color || '#5865F2')
-    .setTitle(replaceTitle(wm.title || '👋 Welcome to {server}!'))
+    .setTitle(replacePlaceholders(wm.title || '👋 Welcome to {server}!'))
     .setDescription(replacePlaceholders(wm.description || 'Hey {mention}, glad to have you here!\nEnjoy your stay.'))
     .setFooter({ text: `Member #${member.guild.memberCount}` });
 
   // Thumbnail: 'avatar' = member's avatar, a URL = custom image, '' = none
   if (wm.thumbnail === 'avatar') {
-    embed.setThumbnail(member.user.displayAvatarURL({ dynamic: true }));
+    embed.setThumbnail(member.user.displayAvatarURL({ forceStatic: false }));
   } else if (wm.thumbnail) {
     embed.setThumbnail(wm.thumbnail);
   }
@@ -478,6 +575,8 @@ function buildWelcomeEmbed(member) {
 }
 
 // ─── READY ───────────────────────────────────────────────────────────────────
+// discord.js v14 uses 'clientReady' (renamed from 'ready' in v13).
+// It will change again in v15 — for now this is correct.
 client.once('clientReady', async () => {
   console.log(`✅ Bot is online as ${client.user.tag}`);
   client.user.setActivity('Moderating the server', { type: 3 });
@@ -518,12 +617,7 @@ client.on('guildMemberAdd', async (member) => {
   if (config.welcomeMessage?.enabled !== false) {
     const welcomeChannel = member.guild.channels.cache.find(ch => ch.name === config.welcomeChannelName);
     if (welcomeChannel) {
-      // Discord does not render mentions inside embed titles — they show as raw <@id> text.
-      // Sending mention as plain content triggers the actual ping.
-      welcomeChannel.send({
-        content: `<@${member.user.id}>`,
-        embeds: [buildWelcomeEmbed(member)]
-      }).catch(err => console.error('Welcome send error:', err));
+      welcomeChannel.send({ embeds: [buildWelcomeEmbed(member)] }).catch(err => console.error('Welcome send error:', err));
     }
   }
 
@@ -543,9 +637,7 @@ client.on('guildMemberAdd', async (member) => {
       if (dm.image && dm.image.startsWith('http')) embed.setImage(dm.image);
 
       const sendOptions = { embeds: [embed] };
-      // If a button was configured, we can't add buttons to DMs via embeds alone —
-      // but we can append the link as plain text below the embed.
-      const components = [];
+      // If a button was configured, append the link as plain text below the embed.
       if (dm.btnLabel && dm.btnUrl) {
         // Send link as a separate line since buttons require component rows
         await member.send(sendOptions).catch(() => {});
@@ -610,7 +702,7 @@ client.on('messageCreate', async (message) => {
 
   // Bad word filter
   const lower = message.content.toLowerCase();
-  if (config.badWords.some(w => lower.includes(w))) {
+  if ((config.badWords || []).some(w => lower.includes(w))) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`⚠️ ${message.author}, that language isn't allowed here.`);
     setTimeout(() => warn.delete().catch(() => {}), 5000);
@@ -673,8 +765,234 @@ client.on('messageReactionRemove', async (reaction, user) => {
   if (member) await member.roles.remove(rr.roleId).catch(() => {});
 });
 
+// ─── TICKET PANEL HELPERS ────────────────────────────────────────────────────
+
+// Builds the permission overwrites array for a ticket channel.
+// Always hides from @everyone, always gives access to the ticket opener,
+// and gives full mod access to all roles listed in kick/ban permissions.
+function buildTicketPermissions(guild, userId) {
+  const overwrites = [
+    { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+  ];
+  const modRoleNames = [...new Set([...(config.permissions.kick || []), ...(config.permissions.ban || [])])];
+  for (const roleName of modRoleNames) {
+    const role = guild.roles.cache.find(r => r.name === roleName);
+    if (role) overwrites.push({
+      id: role.id,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
+    });
+  }
+  return overwrites;
+}
+
+// Posts the ticket panel message (embed + select menu) into a channel.
+// The panel is built from an ordered list of "blocks" configured in the dashboard:
+//   { type: 'text',    content: '...' }        — a paragraph of text
+//   { type: 'divider'                }          — a thin horizontal line (empty field)
+//   { type: 'image',   url: '...'    }          — the big banner image/gif
+//   { type: 'dropdown'               }          — the select menu (position controlled by block order)
+// This lets you place the dropdown wherever you want inside the embed.
+async function postTicketPanel(channel, guild) {
+  const tp = config.ticketPanel;
+  if (!tp) throw new Error('Ticket panel not configured.');
+  const types = tp.ticketTypes || [];
+  if (types.length === 0) throw new Error('No ticket types configured. Add at least one in the dashboard.');
+
+  const blocks = tp.blocks || [
+    { type: 'text', content: tp.embed?.description || '' },
+    { type: 'divider' },
+    { type: 'dropdown' },
+    { type: 'image', url: tp.embed?.image || '' },
+  ];
+
+  // ── DISCORD COMPONENTS V2 ─────────────────────────────────────────────────────
+  // Components V2 (MessageFlags.IsComponentsV2) lets you place text, separators,
+  // images, and select menus in ANY order inside one message.
+  // We use ContainerBuilder which gives the colored left border (like an embed).
+  // Inside the container we add components in block order:
+  //   TextDisplayBuilder  → text paragraph
+  //   SeparatorBuilder    → horizontal divider line
+  //   ActionRowBuilder    → the select menu dropdown
+  //   MediaGalleryBuilder → the image
+  // This is exactly how the UnrealShop bot achieves the layout.
+
+  const accentColor = parseInt((tp.embed?.color || '#9b59b6').replace('#', ''), 16);
+  const container = new ContainerBuilder().setAccentColor(accentColor);
+
+  // Title as bold text at the top if set
+  if (tp.embed?.title) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`## ${tp.embed.title}`)
+    );
+  }
+
+  // Walk blocks in order and add to container
+  const files = [];
+  let fileIndex = 0;
+
+  for (const block of blocks) {
+    if (block.type === 'text' && block.content) {
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(block.content)
+      );
+
+    } else if (block.type === 'divider') {
+      container.addSeparatorComponents(
+        new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
+      );
+
+    } else if (block.type === 'dropdown') {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('ticket_type_select')
+        .setPlaceholder(tp.placeholder || '\u2716 | No option selected')
+        .addOptions(types.map(t => ({
+          label: t.label,
+          description: t.description || '',
+          value: t.value,
+          emoji: t.emoji || undefined,
+        })));
+      container.addActionRowComponents(
+        new ActionRowBuilder().addComponents(menu)
+      );
+
+    } else if (block.type === 'image' && block.url) {
+      const imageUrl = block.url;
+      if (imageUrl.startsWith('data:')) {
+        // Uploaded image — attach as file and reference via attachment://
+        const buf = Buffer.from(imageUrl.split(',')[1], 'base64');
+        const filename = `panel-image-${fileIndex++}.png`;
+        files.push(new AttachmentBuilder(buf, { name: filename }));
+        container.addMediaGalleryComponents(
+          new MediaGalleryBuilder().addItems(
+            new MediaGalleryItemBuilder().setURL(`attachment://${filename}`)
+          )
+        );
+      } else {
+        container.addMediaGalleryComponents(
+          new MediaGalleryBuilder().addItems(
+            new MediaGalleryItemBuilder().setURL(imageUrl)
+          )
+        );
+      }
+    }
+  }
+
+  // Footer as text at the bottom if set
+  if (tp.embed?.footer) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# ${tp.embed.footer}`)
+    );
+  }
+
+  return channel.send({
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    ...(files.length ? { files } : {}),
+  });
+}
+
 // ─── SLASH COMMAND HANDLER ────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
+  // ── Handle ticket type select menu ──────────────────────────────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_type_select') {
+    const selectedValue = interaction.values[0];
+    const tp = config.ticketPanel;
+    const ticketType = (tp?.ticketTypes || []).find(t => t.value === selectedValue);
+    if (!ticketType) return interaction.reply({ content: '❌ Unknown ticket type.', flags: MessageFlags.Ephemeral });
+
+    const guild = interaction.guild;
+    const member = interaction.member;
+    const safeName = member.user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'user';
+    const channelName = `${ticketType.channelPrefix || ('ticket-' + selectedValue)}-${safeName}`;
+
+    // Check for existing open ticket of the same type
+    const existing = guild.channels.cache.find(c => c.name === channelName);
+    if (existing) {
+      return interaction.reply({ content: `❌ You already have an open ticket: ${existing}. Use \`/close\` inside it to close it.`, flags: MessageFlags.Ephemeral });
+    }
+
+    // Find or create the Tickets category
+    let category = guild.channels.cache.find(c => c.name === (tp?.categoryName || config.ticketCategoryName) && c.type === ChannelType.GuildCategory);
+    if (!category) {
+      category = await guild.channels.create({ name: tp?.categoryName || config.ticketCategoryName, type: ChannelType.GuildCategory }).catch(() => null);
+    }
+
+    const ticketChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      topic: member.user.id, // store opener's user ID so /close can identify ticket channels
+      parent: category?.id,
+      permissionOverwrites: buildTicketPermissions(guild, member.user.id),
+    }).catch(err => { console.error('Ticket channel create error:', err); return null; });
+
+    if (!ticketChannel) {
+      return interaction.reply({ content: '❌ Failed to create ticket channel. Make sure the bot has Manage Channels permission.', flags: MessageFlags.Ephemeral });
+    }
+
+    // ── Build the welcome embed sent inside the new ticket channel ─────────────
+    // All fields are configurable per ticket type from the dashboard.
+    // Supports: title, description, color, image (URL), footer, thumbnail.
+    // Placeholders: {mention} → pings the user, {user} → their username.
+    const replacePlaceholders = str => (str || '')
+      .replace(/\{mention\}/g, `<@${member.user.id}>`)
+      .replace(/\{user\}/g, member.user.username)
+      .replace(/\{type\}/g, ticketType.label);
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor(ticketType.welcomeColor || '#5865f2')
+      .setTitle(replacePlaceholders(ticketType.welcomeTitle || `🎫 ${ticketType.label} Ticket`))
+      .setDescription(replacePlaceholders(
+        ticketType.welcomeDesc ||
+        `Hey {mention}, thanks for opening a **${ticketType.label}** ticket!\n\nDescribe your request and a moderator will be with you shortly.\n\nUse the button below to close this ticket when done.`
+      ))
+      .setTimestamp();
+
+    // Optional fields per ticket type
+    if (ticketType.welcomeFooter) {
+      welcomeEmbed.setFooter({ text: replacePlaceholders(ticketType.welcomeFooter) });
+    } else {
+      welcomeEmbed.setFooter({ text: 'Only you and moderators can see this channel' });
+    }
+    if (ticketType.welcomeImage)     welcomeEmbed.setImage(ticketType.welcomeImage);
+    if (ticketType.welcomeThumbnail) welcomeEmbed.setThumbnail(ticketType.welcomeThumbnail);
+
+    // Close button always shown in the ticket channel
+    const closeBtn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('close_ticket')
+        .setLabel('🔒 Close Ticket')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    // Opening message — the ping line above the embed.
+    // Configurable per ticket type; falls back to a plain mention.
+    const openingMsg = replacePlaceholders(
+      ticketType.openingMessage || `<@${member.user.id}>`
+    );
+
+    await ticketChannel.send({ content: openingMsg, embeds: [welcomeEmbed], components: [closeBtn] });
+
+    // Confirm to user ephemerally (only they see this)
+    await interaction.reply({ content: `✅ Your ticket has been created: ${ticketChannel}`, flags: MessageFlags.Ephemeral });
+    logAction(guild, `🎫 TICKET OPENED (${ticketType.label})`, member.user, member.user, `Opened via panel: ${channelName}`, '#9b59b6');
+    return;
+  }
+
+  // ── Handle close button inside ticket channels ───────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'close_ticket') {
+    if (!interaction.channel.topic?.match(/^\d{17,19}$/)) {
+      return interaction.reply({ content: '❌ This button only works inside a ticket channel.', flags: MessageFlags.Ephemeral });
+    }
+    if (!hasPermission(interaction.member, 'kick') && interaction.channel.topic !== interaction.user.id) {
+      return interaction.reply({ content: '❌ Only moderators can close tickets they did not open.', flags: MessageFlags.Ephemeral });
+    }
+    await interaction.reply('🔒 Ticket closing in 5 seconds...');
+    logAction(interaction.guild, '🎫 TICKET CLOSED', interaction.user, interaction.user, 'Closed via button', '#ed4245');
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
   const { commandName, guild, member } = interaction;
 
@@ -783,6 +1101,121 @@ client.on('interactionCreate', async (interaction) => {
         interaction.editReply(`❌ Error: ${err.message}. Make sure the message ID is from this channel.`);
       }
 
+    // BUG FIX #3 (continued): Ticket and close command implementations.
+    // /ticket creates a private channel only visible to the user + moderators.
+    // /close deletes it after a 5-second countdown.
+    } else if (commandName === 'ticket') {
+      // Check if this user already has an open ticket
+      const existingTicket = guild.channels.cache.find(
+        c => c.name === `ticket-${member.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}` && c.topic === member.user.id
+      );
+      if (existingTicket) {
+        return interaction.editReply(`❌ You already have an open ticket: ${existingTicket}. Use \`/close\` inside it to close it first.`);
+      }
+
+      // Find or create the Tickets category
+      let category = guild.channels.cache.find(c => c.name === config.ticketCategoryName && c.type === ChannelType.GuildCategory);
+      if (!category) {
+        category = await guild.channels.create({ name: config.ticketCategoryName, type: ChannelType.GuildCategory }).catch(() => null);
+      }
+
+      // Build permission overwrites: hide from @everyone, show to the user and mod roles
+      const permissionOverwrites = [
+        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: member.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      ];
+      // Also give access to all allowed mod roles
+      const modRoles = [...new Set([
+        ...(config.permissions.kick || []),
+        ...(config.permissions.ban || []),
+      ])];
+      for (const roleName of modRoles) {
+        const role = guild.roles.cache.find(r => r.name === roleName);
+        if (role) permissionOverwrites.push({ id: role.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
+      }
+
+      const safeName = member.user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'user';
+      const ticketChannel = await guild.channels.create({
+        name: `ticket-${safeName}`,
+        type: ChannelType.GuildText,
+        topic: member.user.id, // store user ID in topic so we can find it later
+        parent: category?.id,
+        permissionOverwrites,
+      }).catch(err => { console.error('Ticket create error:', err); return null; });
+
+      if (!ticketChannel) return interaction.editReply('❌ Failed to create ticket channel. Make sure I have Manage Channels permission.');
+
+      const ticketEmbed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle('🎫 Support Ticket')
+        .setDescription(`Hey ${member}, thanks for opening a ticket!\n\nDescribe your issue and a moderator will be with you shortly.\n\nUse \`/close\` to close this ticket when you're done.`)
+        .setFooter({ text: 'Only you and moderators can see this channel' })
+        .setTimestamp();
+      await ticketChannel.send({ embeds: [ticketEmbed] });
+      interaction.editReply(`✅ Ticket created: ${ticketChannel}`);
+      logAction(guild, '🎫 TICKET OPENED', member.user, member.user, 'User opened a support ticket', '#5865f2');
+
+    } else if (commandName === 'close') {
+      // Must be inside a ticket channel (identified by the topic being a user ID)
+      if (!interaction.channel.topic?.match(/^\d{17,19}$/)) {
+        return interaction.editReply('❌ This command can only be used inside a ticket channel.');
+      }
+      if (!hasPermission(member, 'kick') && interaction.channel.topic !== member.user.id) {
+        return interaction.editReply('❌ Only moderators can close tickets they did not open.');
+      }
+      interaction.editReply('🔒 Ticket closing in 5 seconds...');
+      logAction(guild, '🎫 TICKET CLOSED', member.user, interaction.user, 'Ticket closed', '#ed4245');
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+
+    // FEATURE 1: /slowmode — throttle a channel to prevent message floods
+    } else if (commandName === 'slowmode') {
+      if (!hasPermission(member, 'clear')) return interaction.editReply('❌ No permission.');
+      const seconds = interaction.options.getInteger('seconds');
+      await interaction.channel.setRateLimitPerUser(seconds, `Slowmode set by ${interaction.user.tag}`);
+      if (seconds === 0) {
+        interaction.editReply('✅ Slowmode **disabled** in this channel.');
+      } else {
+        const label = seconds >= 3600 ? `${Math.floor(seconds/3600)}h ${seconds%3600 > 0 ? Math.floor((seconds%3600)/60)+'m' : ''}`.trim()
+                    : seconds >= 60   ? `${Math.floor(seconds/60)}m ${seconds%60 > 0 ? seconds%60+'s' : ''}`.trim()
+                    : `${seconds}s`;
+        interaction.editReply(`✅ Slowmode set to **${label}** in this channel.`);
+      }
+      logAction(guild, `⏱️ SLOWMODE (${seconds}s)`, null, interaction.user, `Set on #${interaction.channel.name}`, '#5865f2');
+
+    // FEATURE 2: /userinfo — quick moderator lookup for a user's join date, roles, and warnings
+    } else if (commandName === 'userinfo') {
+      const target = interaction.options.getMember('user') || member;
+      const warnCount = (warnings[target.user.id] || []).length;
+      const roles = target.roles.cache.filter(r => r.name !== '@everyone').map(r => r.toString()).join(', ') || 'None';
+      const joinedServer = target.joinedAt ? `<t:${Math.floor(target.joinedAt.getTime()/1000)}:R>` : 'Unknown';
+      const createdAccount = `<t:${Math.floor(target.user.createdAt.getTime()/1000)}:R>`;
+      const embed = new EmbedBuilder()
+        .setColor(warnCount >= config.warnThresholds.banAt ? '#ed4245' : warnCount >= config.warnThresholds.muteAt ? '#faa61a' : '#5865f2')
+        .setTitle(`👤 ${target.user.tag}`)
+        .setThumbnail(target.user.displayAvatarURL({ forceStatic: false }))
+        .addFields(
+          { name: 'User ID', value: target.user.id, inline: true },
+          { name: 'Joined Server', value: joinedServer, inline: true },
+          { name: 'Account Created', value: createdAccount, inline: true },
+          { name: 'Warnings', value: warnCount === 0 ? '✅ None' : `⚠️ ${warnCount} warning(s)`, inline: true },
+          { name: 'Roles', value: roles.length > 1024 ? roles.slice(0, 1021) + '...' : roles },
+        )
+        .setFooter({ text: `Requested by ${interaction.user.tag}` })
+        .setTimestamp();
+      interaction.editReply({ embeds: [embed] });
+
+    // /ticket-panel — posts the configured embed+dropdown into a channel
+    } else if (commandName === 'ticket-panel') {
+      if (!hasPermission(member, 'announce')) return interaction.editReply('❌ No permission. You need the announce role.');
+      const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
+      try {
+        await postTicketPanel(targetChannel, guild);
+        interaction.editReply(`✅ Ticket panel posted in ${targetChannel}!`);
+        setTimeout(() => interaction.deleteReply().catch(() => {}), 4000);
+      } catch (err) {
+        interaction.editReply(`❌ ${err.message}`);
+      }
+
     } else if (commandName === 'rules') {
       interaction.editReply(config.customCommands['rules']);
     } else if (commandName === 'socials') {
@@ -793,6 +1226,8 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle('📋 Bot Commands')
         .addFields(
           { name: '🔨 Moderation', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/warn` `/warnings` `/clearwarnings` `/clear` `/purge`' },
+          { name: '⏱️ Channel Tools', value: '`/slowmode <seconds>` — Throttle a channel (0 to disable)\n`/userinfo [@user]` — Look up join date, roles, and warnings' },
+          { name: '🎫 Tickets', value: '`/ticket` — Open a general ticket  |  `/close` — Close a ticket (mods)\n`/ticket-panel` — Post the select-menu ticket panel in a channel (admin)' },
           { name: '🎭 Roles', value: '`/reactionrole` — Add a reaction role to a message' },
           { name: '⚡ Custom', value: '`/rules` `/socials`' },
         )
