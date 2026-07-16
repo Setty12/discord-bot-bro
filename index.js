@@ -39,6 +39,11 @@ http.createServer(async (req, res) => {
       memberCounterChannelName: config.memberCounterChannelName,
       joinDM: config.joinDM,
       antiSpam: config.antiSpam,
+      antiInvite: {
+        enabled: config.antiInvite?.enabled || false,
+        allowedRoles: config.antiInvite?.allowedRoles || [],
+      },
+      auditLog: config.auditLog || {},
       warnThresholds: config.warnThresholds,
       introSystem: config.introSystem,
       welcomeMessage: config.welcomeMessage,
@@ -217,6 +222,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildEmojisAndStickers, // for emoji/sticker changes
   ],
   // BUG FIX #2 (continued): These three partials must ALL be present together.
   // Message  — allows receiving reaction events for uncached messages
@@ -682,7 +688,7 @@ client.once('clientReady', async () => {
 
 // ─── MEMBER JOIN ──────────────────────────────────────────────────────────────
 client.on('guildMemberAdd', async (member) => {
-  console.log(`Member joined: ${member.user.tag}`);
+  if (config.auditLog?.joins === false) { /* skip log */ } else { console.log(`Member joined: ${member.user.tag}`); }
   await updateMemberCount(member.guild);
 
   if (config.autoRole) {
@@ -731,7 +737,103 @@ client.on('guildMemberAdd', async (member) => {
 // ─── MEMBER LEAVE ─────────────────────────────────────────────────────────────
 client.on('guildMemberRemove', async (member) => {
   await updateMemberCount(member.guild);
-  logAction(member.guild, '📤 MEMBER LEFT', member.user, null, null, '#ed4245');
+  if (config.auditLog?.leaves ?? true) {
+    logAction(member.guild, '📤 MEMBER LEFT', member.user, null, null, '#ed4245');
+  }
+});
+
+// ─── AUDIT LOG EVENTS ────────────────────────────────────────────────────────
+// These events log server changes to the mod-log channel so moderators stay
+// aware of everything happening. Each event is individually logged via logAction().
+
+// ── Each event checks config.auditLog before logging ─────────────────────────
+
+// Message deleted
+client.on('messageDelete', async (message) => {
+  if (!(config.auditLog?.msgDelete ?? true)) return;
+  if (!message.guild || message.author?.bot) return;
+  if (!message.content && !message.attachments?.size) return;
+  const preview = message.content
+    ? (message.content.length > 200 ? message.content.slice(0, 200) + '...' : message.content)
+    : '[attachment only]';
+  logAction(message.guild, '🗑️ MESSAGE DELETED', message.author, null,
+    `In <#${message.channel.id}>: "${preview}"`, '#ed4245');
+});
+
+// Message edited
+client.on('messageUpdate', async (oldMsg, newMsg) => {
+  if (!(config.auditLog?.msgEdit ?? true)) return;
+  if (!newMsg.guild || newMsg.author?.bot) return;
+  if (!oldMsg.content || oldMsg.content === newMsg.content) return;
+  const oldPreview = oldMsg.content.length > 150 ? oldMsg.content.slice(0, 150) + '...' : oldMsg.content;
+  const newPreview = newMsg.content.length > 150 ? newMsg.content.slice(0, 150) + '...' : newMsg.content;
+  logAction(newMsg.guild, '✏️ MESSAGE EDITED', newMsg.author, null,
+    `In <#${newMsg.channel.id}>\n**Before:** ${oldPreview}\n**After:** ${newPreview}`, '#faa61a');
+});
+
+// Channel created / deleted
+client.on('channelCreate', async (channel) => {
+  if (!(config.auditLog?.channels ?? true)) return;
+  if (!channel.guild) return;
+  const typeLabel = channel.type === 0 ? 'Text' : channel.type === 2 ? 'Voice' : channel.type === 4 ? 'Category' : 'Channel';
+  logAction(channel.guild, '📢 CHANNEL CREATED', null, null,
+    `${typeLabel}: <#${channel.id}> (${channel.name})`, '#57f287');
+});
+client.on('channelDelete', async (channel) => {
+  if (!(config.auditLog?.channels ?? true)) return;
+  if (!channel.guild) return;
+  logAction(channel.guild, '🗑️ CHANNEL DELETED', null, null, `#${channel.name}`, '#ed4245');
+});
+
+// Channel renamed
+client.on('channelUpdate', async (oldChannel, newChannel) => {
+  if (!(config.auditLog?.channelRename ?? true)) return;
+  if (!newChannel.guild) return;
+  if (oldChannel.name !== newChannel.name) {
+    logAction(newChannel.guild, '📝 CHANNEL RENAMED', null, null,
+      `#${oldChannel.name} → #${newChannel.name}`, '#faa61a');
+  }
+});
+
+// Role created / deleted / renamed
+client.on('roleCreate', async (role) => {
+  if (!(config.auditLog?.roles ?? true)) return;
+  logAction(role.guild, '🎭 ROLE CREATED', null, null, `Role: ${role.name}`, '#57f287');
+});
+client.on('roleDelete', async (role) => {
+  if (!(config.auditLog?.roles ?? true)) return;
+  logAction(role.guild, '🎭 ROLE DELETED', null, null, `Role: ${role.name}`, '#ed4245');
+});
+client.on('roleUpdate', async (oldRole, newRole) => {
+  if (!(config.auditLog?.roles ?? true)) return;
+  if (oldRole.name !== newRole.name) {
+    logAction(newRole.guild, '🎭 ROLE RENAMED', null, null,
+      `${oldRole.name} → ${newRole.name}`, '#faa61a');
+  }
+});
+
+// Member roles added/removed or nickname changed
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  const addedRoles   = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
+  const removedRoles = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id));
+  if ((config.auditLog?.memberRoles ?? true)) {
+    if (addedRoles.size)   logAction(newMember.guild, '✅ ROLE ADDED',   newMember.user, null, `Roles added: ${addedRoles.map(r => r.name).join(', ')}`, '#57f287');
+    if (removedRoles.size) logAction(newMember.guild, '❌ ROLE REMOVED', newMember.user, null, `Roles removed: ${removedRoles.map(r => r.name).join(', ')}`, '#ed4245');
+  }
+  if ((config.auditLog?.nicknames ?? true) && oldMember.nickname !== newMember.nickname) {
+    logAction(newMember.guild, '📝 NICKNAME CHANGED', newMember.user, null,
+      `${oldMember.nickname || oldMember.user.username} → ${newMember.nickname || newMember.user.username}`, '#faa61a');
+  }
+});
+
+// Manual bans/unbans
+client.on('guildBanAdd', async (ban) => {
+  if (!(config.auditLog?.bans ?? true)) return;
+  logAction(ban.guild, '🔨 MEMBER BANNED', ban.user, null, ban.reason || 'No reason provided', '#ed4245');
+});
+client.on('guildBanRemove', async (ban) => {
+  if (!(config.auditLog?.bans ?? true)) return;
+  logAction(ban.guild, '✅ MEMBER UNBANNED', ban.user, null, null, '#57f287');
 });
 
 // ─── ANTI-SPAM + AUTO-MOD + INTRO SYSTEM ─────────────────────────────────────
@@ -784,6 +886,31 @@ client.on('messageCreate', async (message) => {
     const warn = await message.channel.send(`⚠️ ${message.author}, that language isn't allowed here.`);
     setTimeout(() => warn.delete().catch(() => {}), 5000);
     return;
+  }
+
+  // Anti-invite filter — deletes messages containing Discord invite links
+  if (config.antiInvite?.enabled) {
+    const inviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9-]+/i;
+    if (inviteRegex.test(message.content)) {
+      // Check if the member has an exempt role
+      const member = message.guild.members.cache.get(message.author.id);
+      // User is allowed to post invites if:
+      // 1. They have Manage Messages (mods/admins always exempt), OR
+      // 2. They have one of the specifically allowed roles from config
+      const allowedRoles = config.antiInvite.allowedRoles || [];
+      const isExempt = member?.permissions.has(PermissionFlagsBits.ManageMessages) ||
+        allowedRoles.some(roleName => member?.roles.cache.some(r => r.name === roleName));
+      if (!isExempt) {
+        await message.delete().catch(() => {});
+        const warn = await message.channel.send(
+          `🚫 <@${message.author.id}>, posting invite links to other servers is not allowed here.`
+        );
+        setTimeout(() => warn.delete().catch(() => {}), 5000);
+        logAction(message.guild, '🚫 INVITE BLOCKED', message.author, client.user,
+          `Attempted to post an invite link in #${message.channel.name}`, '#ed4245');
+        return;
+      }
+    }
   }
 
   // Anti-spam
