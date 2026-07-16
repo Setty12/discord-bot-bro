@@ -335,10 +335,25 @@ async function saveConfigToCloud(configData) {
 
 async function saveTicketPanelsToCloud() {
   if (!RAILWAY_TOKEN) return;
-  // Panels go into their own dedicated variable, completely separate from BOT_CONFIG.
-  // This avoids Railway silently truncating BOT_CONFIG when panels make it too large.
-  const panels = config.ticketPanels || [];
-  const ok = await saveRailwayVar('TICKET_PANEL_CONFIG', JSON.stringify(panels));
+  // Strip base64 image data before saving — base64 strings are huge (500KB–2MB each)
+  // and will exceed Railway's variable size limit, causing the HTML error response.
+  // Images saved as URLs are kept as-is. Uploaded base64 images are replaced with a
+  // placeholder so the user knows to switch to a URL for persistence across restarts.
+  const panels = (config.ticketPanels || []).map(panel => ({
+    ...panel,
+    blocks: (panel.blocks || []).map(block => {
+      if (block.type === 'image' && block.url && block.url.startsWith('data:')) {
+        // Replace base64 with empty string — user must use a URL for the image to persist
+        return { ...block, url: '', _base64Stripped: true };
+      }
+      return block;
+    }),
+  }));
+
+  const json = JSON.stringify(panels);
+  console.log(`Saving ticket panels: ${(json.length / 1024).toFixed(1)}KB`);
+
+  const ok = await saveRailwayVar('TICKET_PANEL_CONFIG', json);
   if (ok) console.log(`✅ Ticket panels saved to TICKET_PANEL_CONFIG (${panels.length} panel(s))`);
   else console.error('❌ Failed to save ticket panels to Railway');
 }
